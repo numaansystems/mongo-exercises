@@ -1,158 +1,35 @@
 db.prices.aggregate([
   {
-    "$addFields": {
-      "date": {
-        "$dateFromString": {
-          "dateString": "$date",
-          "format": "%Y-%m-%d"
-        }
-      }
+    $sort: { security: 1, date: 1 } // Sort by security and date
+  },
+  {
+    $group: {
+      _id: "$security",
+      prices: { $push: { date: "$date", price: "$price" } } // Group by security and push prices into an array
     }
   },
   {
-    "$sort": {
-      "cusip": 1,
-      "date": -1
-    }
-  },
-  {
-    "$group": {
-      "_id": "$cusip",
-      "dates": {
-        "$addToSet": "$date"
-      },
-      "prices": {
-        "$push": {
-          "date": "$date",
-          "price": "$price"
-        }
-      }
-    }
-  },
-  {
-    "$addFields": {
-      "dates": {
-        "$slice": ["$dates", 10]
-      }
-    }
-  },
-  {
-    "$addFields": {
-      "prices": {
-        "$filter": {
-          "input": "$prices",
-          "as": "priceEntry",
-          "cond": {
-            "$in": ["$$priceEntry.date", "$dates"]
-          }
-        }
-      }
-    }
-  },
-  {
-    "$addFields": {
-      "hasMultipleDates": {
-        "$gte": [{ "$size": "$dates" }, 2]
-      }
-    }
-  },
-  {
-    "$lookup": {
-      "from": "prices",
-      "let": { "cusip": "$_id", "dates": "$dates" },
-      "pipeline": [
-        {
-          "$match": {
-            "$expr": {
-              "$and": [
-                { "$eq": ["$cusip", "$$cusip"] },
-                { "$in": ["$date", "$$dates"] }
-              ]
-            }
-          }
-        },
-        {
-          "$sort": { "date": -1 }
-        },
-        {
-          "$group": {
-            "_id": "$cusip",
-            "dates": { "$push": "$date" },
-            "prices": { "$push": "$price" }
-          }
-        },
-        {
-          "$project": {
-            "priceChanges": {
-              "$map": {
-                "input": {
-                  "$range": [1, { "$size": "$prices" }]
-                },
-                "as": "idx",
-                "in": {
-                  "dateChanged": {
-                    "$subtract": [
-                      { "$arrayElemAt": ["$dates", "$$idx"] },
-                      { "$arrayElemAt": ["$dates", { "$subtract": ["$$idx", 1] }] }
-                    ]
-                  },
-                  "priceChanged": {
-                    "$ne": [
-                      { "$arrayElemAt": ["$prices", "$$idx"] },
-                      { "$arrayElemAt": ["$prices", { "$subtract": ["$$idx", 1] }] }
-                    ]
-                  }
-                }
+    $project: {
+      _id: 1,
+      unchangedDays: {
+        $reduce: {
+          input: {
+            $map: {
+              input: { $slice: ["$prices", 1, { $subtract: [{ $size: "$prices" }, 1] }] },
+              as: "pricePair",
+              in: {
+                $cond: [
+                  { $eq: [ { $arrayElemAt: ["$prices.price", { $indexOfArray: ["$prices.date", "$$pricePair.date"] }] }, "$$pricePair.price" ] },
+                  1,
+                  0
+                ]
               }
             }
-          }
-        },
-        {
-          "$unwind": "$priceChanges"
-        },
-        {
-          "$match": {
-            "priceChanges.priceChanged": true
-          }
-        },
-        {
-          "$addFields": {
-            "daysSincePriceChanged": {
-              "$divide": [
-                "$priceChanges.dateChanged",
-                86400000 // Number of milliseconds in a day
-              ]
-            }
-          }
-        },
-        {
-          "$group": {
-            "_id": "$_id",
-            "daysSincePriceChanged": {
-              "$max": "$daysSincePriceChanged"
-            }
-          }
-        }
-      ],
-      "as": "priceChangeInfo"
-    }
-  },
-  {
-    "$addFields": {
-      "daysSincePriceChanged": {
-        "$cond": {
-          "if": { "$gt": [{ "$size": "$priceChangeInfo" }, 0] },
-          "then": { "$arrayElemAt": ["$priceChangeInfo.daysSincePriceChanged", 0] },
-          "else": 0
+          },
+          initialValue: 0,
+          in: { $add: ["$$value", "$$this"] }
         }
       }
     }
-  },
-  {
-    "$project": {
-      "_id": 0,
-      "cusip": "$_id",
-      "daysSincePriceChanged": 1
-    }
   }
-]);
+])
